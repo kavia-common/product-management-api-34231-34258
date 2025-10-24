@@ -242,6 +242,54 @@ def delete_product(
     return None
 
 
+# PUBLIC_INTERFACE
+@app.get(
+    "/products/balance",
+    tags=["products"],
+    summary="Get total inventory balance",
+    description="Returns the total value of inventory as the sum over all products of price * quantity.",
+)
+def get_products_balance():
+    """
+    Calculate the total inventory value.
+
+    Tries to perform efficient aggregation in SQLite using:
+      SELECT COALESCE(SUM(price * quantity), 0) AS total FROM products
+
+    If any database error occurs (e.g., file missing, table missing, or any unexpected condition),
+    falls back to computing the balance in memory by reading all rows.
+
+    Returns:
+        JSON object: {"total_balance": <float>}
+        - 0 if there are no products or in error conditions, ensuring a graceful response.
+    """
+    try:
+        # Primary path: efficient SQL aggregation
+        with get_db_cursor() as cur:
+            cur.execute("SELECT COALESCE(SUM(price * quantity), 0) AS total FROM products")
+            row = cur.fetchone()
+            total = row["total"] if row and row["total"] is not None else 0.0
+            # Normalize to 2 decimal places similar to price handling
+            return {"total_balance": round(float(total), 2)}
+    except Exception:
+        # Fallback path: compute in memory
+        try:
+            with get_db_cursor() as cur:
+                cur.execute("SELECT price, quantity FROM products")
+                rows = cur.fetchall()
+                total = 0.0
+                for r in rows or []:
+                    try:
+                        total += float(r["price"]) * int(r["quantity"])
+                    except Exception:
+                        # Skip malformed rows in worst case
+                        continue
+                return {"total_balance": round(float(total), 2)}
+        except Exception:
+            # If even fallback fails, return 0 per requirement
+            return {"total_balance": 0.0}
+
+
 if __name__ == "__main__":
     # Entrypoint to run via: python -m src.api.main
     import uvicorn
